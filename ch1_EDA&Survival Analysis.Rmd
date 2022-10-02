@@ -1,0 +1,617 @@
+---
+title: "CH1_EDA and Survival Analysis"
+author: "Selin Karabulut"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+setwd("~/Desktop/Dissertation/CH1")
+knitr::opts_chunk$set(
+  warning = TRUE, # show warnings
+  message = TRUE, # show messages
+  error = TRUE, # do not interrupt generation in case of errors,
+  echo = TRUE  # show R code
+)
+```
+
+
+```{r}
+#load libraries
+webshot::install_phantomjs()
+library(dplyr)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+theme_set(theme_pubclean())
+library(survival)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(tidycmprsk)
+library(condSURV)
+
+library(kableExtra)
+
+library(DataExplorer) # for EDA
+library(dlookr) # for outlier analysis
+
+library(survminer)
+library(powerSurvEpi)
+library(rms)  # to extract survival times from KM curve, using survest function
+library(sm)  # to do quantile regression of survival data vs. continuous variable (sm.survival)
+
+remotes::install_github("zabore/condsurv")
+# for conditional survival plots
+library(condsurv)  # remotes::install_github("zabore/condsurv")
+
+remotes::install_github("RichardBirnie/survtools")
+# to extract survival probabilities, by group, from survfit (KM plot)
+library(survtools)  # remotes::install_github("RichardBirnie/survtools")
+
+# put this last so that if necessary, it masks stuff from above
+library(tidyverse)
+```
+
+```{r}
+#load data
+data <-read_excel("Data.xlsx")
+```
+
+```{r}
+#replace all values equal to M nad F in 'sex' column with 0 and 1
+data$sex[data$sex == 'M'] <- 0
+data$sex[data$sex == 'F'] <- 1
+
+#view updated data frame
+data
+str(data)
+```
+
+```{r}
+#data$sex <- as.numeric(data$sex)                                 # Convert string to numeric in R
+#str(data)
+```
+
+```{r}
+#data dimensions
+dim(data)
+```
+
+```{r}
+str(data)
+```
+
+```{r}
+# subset data 
+# exclude party leaders who came power before/in 2018 and are still in power
+data1 <- subset(data, status == 0, select = c("country","continent","party_name", "leader_name", "sex", "age", "in_year", "tenure", "sysofgov"))
+data1
+```
+
+
+
+```{r}
+# count unique party leader name using the full data
+length(unique(data$leader_name))
+# count unique party names by country using the full data
+df1 <- data %>%
+  distinct(leader_name, country) %>%
+  group_by(country) %>%
+  summarize("political party leaders in country"=n())
+df1
+```
+
+
+
+```{r}
+# count unique party names by country using the full data
+df2 <- data %>%
+  distinct(party_name, country) %>%
+  group_by(country) %>%
+  summarize("political parties in country"=n()) 
+df2
+
+```
+
+
+
+
+
+```{r}
+# data includes every party leaders who came in power in/after 1980
+# data 1 only includes leaders who came came in power in/after 1980 and left power before 2019.
+# the mean of party leaders 'tenure by country using data1
+df3 <- data1 %>% 
+  group_by(country) %>% 
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+df3
+```
+
+
+
+```{r}
+library(kableExtra)
+#put all data frames into list
+# number of political parties (data), political party leaders (data), and mean of their tenures in every country (data1)
+df_list <- list(df1, df2, df3) 
+df_list %>% reduce(full_join, by='country')
+kbl(df_list) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+
+
+
+
+
+```{r}
+# difference between average tenures of party leaders who came in power in/after 1980 and left power before 2019 & who came in power in/after 1980 and still in power
+#0=already left the office
+#1=still in power
+data %>%
+  filter(!is.na(status)) %>%
+  group_by(status) %>%
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+```
+
+```{r}
+# How many party leaders who are still in power in the dataset?
+#0=already left the office
+#1=still in power
+data %>%
+  count(data$status)
+```
+
+```{r}
+df10 <- data %>%
+  filter(status == 0)
+df10
+```
+
+```{r}
+df10 %>%
+  group_by(sex) %>%
+  tally()
+
+```
+
+
+
+
+
+```{r}
+# average tenure by sex and system of government in each year
+df4 <- data1 %>% 
+  filter(!is.na(sex) & !is.na(sysofgov)) %>%
+  group_by(in_year, sex,sysofgov) %>% 
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+df4
+knitr::kable(df4)
+```
+
+
+
+
+
+```{r}
+# average tenure over time by sex
+# male party leaders -> sex=0 vs. female party leaders -> sex=1
+ggplot(df4, aes(x=in_year, y=mean_tenure, colour = sex)) + geom_point() + geom_smooth(method = lm, se = FALSE)
+```
+
+
+```{r}
+# average tenure over time by sex using splines
+ggplot(df4, aes(x=in_year, y=mean_tenure, colour = sex)) +  geom_smooth(method = lm, formula = y ~ splines::bs(x, 3), se = FALSE) + labs(title = "Average tenure over time by gender",
+       x = "Tenure Start Year",
+       y = "Mean Tenure",
+       color = "gender")
+```
+
+```{r}
+# average tenure over time by system of government
+# parliamentary=0, presidential=1, semi-presential=2
+ggplot(df4, aes(x=in_year, y=mean_tenure, colour = as.factor(sysofgov))) + geom_smooth(method = lm, se = FALSE)+
+  labs(title = "Average tenure over time by system of government",
+       x = "Tenure Start Year",
+       y = "Mean Tenure",
+       color = "System of Government")
+```
+
+
+
+
+
+```{r}
+# average tenure over time by system of government using splines
+ggplot(df4, aes(x=in_year, y=mean_tenure, colour = as.factor(sysofgov))) + geom_point() + geom_smooth(method = lm, formula = y ~ splines::bs(x, 3), se = FALSE) + labs(title = "Average tenure over time by system of government",
+       x = "Tenure Start Year",
+       y = "Mean Tenure",
+       color = "System of Government")
+```
+
+
+
+
+```{r}
+#average tenure by sex in each system of gov.
+ggplot(df4, aes(x=as.factor(sysofgov), y=mean_tenure, fill=sex)) + geom_boxplot() +  labs(title = "Average tenure by gender in different systems of government",
+       x = "System of Government",
+       y = "Mean Tenure",
+       color = "Gender")
+```
+
+
+```{r}
+# density plot by sex
+ggplot(df4, aes(x=mean_tenure, col=sex)) + geom_density()
+```
+
+
+```{r}
+# density plot by sys of gov
+ggplot(df4, aes(x=mean_tenure, col=as.factor(sysofgov))) + geom_density()
+```
+
+```{r}
+# point plot mean tenure over time in different gender categories
+ggplot(df4, aes(x=in_year, y=mean_tenure, color=sex)) + geom_point() + facet_grid(~sex) + labs(title = "Average tenure over time in different gender categories",
+       x = "Tenure Start Year",
+       y = "Mean Tenure",
+       color = "Gender")
+```
+
+#by country
+
+
+```{r}
+# average tenure in each country by sex
+df5 <- data1 %>% 
+  filter( !is.na(sex)) %>%
+  group_by(sex, country) %>% 
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+df5
+knitr::kable(df5)
+```
+
+```{r}
+# boxplot of average tenure in each country
+ggplot(df5, aes(x = country, y = mean_tenure))+  coord_flip()+
+  geom_boxplot() +
+  scale_y_continuous(name = "Average Life Expectancy") +
+  scale_x_discrete(labels = abbreviate, name = "Country")
+```
+
+
+#by continent
+
+```{r}
+# average tenure in each continent over time
+df6 <- data1 %>% 
+  filter( !is.na(continent)) %>%
+  group_by(continent, in_year) %>% 
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+df6
+knitr::kable(df6)
+```
+
+
+```{r}
+# boxplot of average tenure in each continent
+ggplot(df6, aes(x = continent, y = mean_tenure)) +  coord_flip()+
+  geom_boxplot() +
+  scale_y_continuous(name = "Mean Tenure") +
+  scale_x_discrete(labels = abbreviate, name = "Continent") + labs(title = "boxplot of average tenure in each continent",
+       x = "Average tenure",
+       y = "Continent")
+  
+```
+
+
+
+
+```{r}
+#  average tenure in each continent over time by sys of gov.
+df7 <- data1 %>% 
+  filter(!is.na(continent)) %>%
+  group_by(continent, in_year, sysofgov) %>% 
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+df7
+```
+
+
+
+```{r}
+# average tenure by continent and system of government
+df7 %>%
+  filter(continent %in% c("Asia", "Europe","Oceania", "Americas", "Africa") & !is.na(sysofgov)) %>%
+  ggplot(aes(x=in_year,
+           y=mean_tenure,
+           color= as.factor(sysofgov))) +
+  geom_smooth(method = lm, formula = y ~ splines::bs(x, 3), se = FALSE) +
+  facet_wrap(~continent)+
+  labs(title="Party Leaders' Tenure by Continent and System of Government",
+       x="Tenure Start Year",
+       y="Mean Tenure")
+
+```
+
+
+
+
+```{r}
+# mean age
+mean(data$age, na.rm = TRUE)
+
+# mean age by sex (male)
+mean(data$age[data$sex==0], na.rm=TRUE)
+#mean age by sex (female)
+mean(data$age[data$sex==1], na.rm=TRUE)
+  
+```
+
+
+```{r}
+# count female party leaders
+data <- data[!(is.na(data$sex)),]
+df9 <- data %>%
+  count(data$sex)
+df9
+```
+
+
+
+
+
+```{r}
+# percentage of female party leaders
+library(plotrix)
+gender_table <-table(data$sex)
+gender <- data.frame(gend = data$sex)
+library(lessR)
+
+PieChart(gend, hole = 0, values = "%", data = gender,
+         fill = c("red", "green"), main = "Percentage of female vs. male party leaders")
+# Create a legend at the right   
+legend("topright", c("0=Male","1=Female"), cex=0.7, fill=c("red", "green"))
+
+```
+
+
+
+```{r}
+# mean tenure in each year by sex
+df10 <- data %>% 
+  filter(!is.na(sex)) %>%
+  group_by(in_year,sex) %>% 
+  summarise(
+    mean_tenure = mean(tenure, na.rm=T)
+  )
+df10
+```
+
+
+
+```{r}
+# mean tenure in each year by sex
+p<-ggplot(data=df10, aes(x=in_year, y=mean_tenure, fill=sex)) +
+  geom_bar(stat="identity", position=position_dodge())
+p + labs(title="Average tenure in each year by sex", 
+         x="In year", y = "Average Tenure")+
+   scale_fill_manual(values=c('black','lightgray'))+
+  scale_fill_brewer(palette="Paired")+
+  theme_minimal()
+
+```
+
+
+```{r}
+# in total 3635 male party leaders & 417 female leaders
+f <-table(data$sex)
+f
+
+# number of female and male leaders according to the year they first came to power
+d <- table(data$sex,data$in_year)
+d
+
+barplot(table(data$sex,data$in_year),
+main="# female and male leaders according to the year they first came to power",
+xlab="In Year",
+ylab="Count",
+col = c("red","green"),
+beside = TRUE)
+legend("topleft",
+c("Male","Female"),
+fill = c("red","green")
+)
+```
+
+```{r}
+#percentage of female party leaders over time?
+names(dimnames(d))
+names(dimnames(d)) <- c("gender", "in_year")
+names(dimnames(d))
+d
+```
+
+```{r}
+x <- c(1980,1981,1982,1983,1984,1985,1986,1987,1988,1989,1990,1991,1992,1993,1994,1995,1996,1997,1998,1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018)
+y1 <- c(0.033,0.074,0.071,0,0.028,0.115,0.122,0.034,0.061,0.051,0.055,
+            0.073,0.062,0.091,0.069,0.106,0.094,0.082,0.105,0.107,0.094,
+            0.083,0.095,0.114,0.128,0.060,0.098,0.140,0.180,0.104,0.110,
+            0.103,0.133,0.126,0.162,0.163,0.210,0.209,0.140)
+y2<- c(0.966,0.925,0.928,1,0.972,0.885,0.878,0.966,0.939,0.949,0.945,
+          0.927,0.938, 0.909,0.930,0.894,0.906,0.917,0.895,0.893,0.906,
+          0.917,0.905, 0.886,0.872,0.940,0.902,0.860,0.820,0.896,0.890,
+          0.897,0.867,0.874,0.838,0.837,0.790,0.881,0.860)
+
+df <- data.frame(x,y1,y2)
+
+print (df)
+#ggplot(data=df, aes(x=x, y=y1)) +
+#geom_bar(stat="identity", fill="steelblue")+
+#  coord_flip()
+
+```
+
+
+```{r}
+# x-axis represents the year party leaders started  their tenures. 
+# for examples, of party leaders who came to power in 2008, 18% of them were women. 
+# another example is that in 1983 of party leaders who came to power in 1983, all of them were men. 
+#It doesn't mean that in 1983 there were not any female party leaders, 
+#but rather it means that in 1983 no new female party leaders came to power. 
+
+library(plotly)
+
+
+fig <- plot_ly(df, x = ~x, y = ~y1, type = 'bar', name = 'Female', marker = list(
+      color = 'red'
+    ))
+fig <- fig %>% add_trace(y = ~y2, name = 'Male', marker = list(
+      color = 'blue'
+    ))
+fig <- fig %>% layout(title = 'Proportion of female/male party leaders over time',xaxis = list(title = "", tickangle = -45),
+         yaxis = list(title = ""),
+         margin = list(b = 100),
+         barmode = 'group')
+
+fig
+```
+
+
+
+```{r}
+#Note that the status is coded in a non-standard way in this dataset. Typically #you will see 1=event, 0=censored. Let’s recode it to avoid confusion:
+data <- 
+data %>% 
+  mutate(
+    status = recode(status, `1` = 0, `0` = 1)
+  )
+```
+
+
+```{r}
+head(data[, c("tenure", "status", "sex")])
+```
+
+
+```{r}
+Surv(data$tenure, data$status)[1:10]
+```
+
+
+```{r}
+s1 <- survfit(Surv(tenure, status) ~ 1, data = data)
+str(s1)
+```
+
+
+```{r}
+survfit2(Surv(tenure, status) ~ 1, data = data) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+  )
+```
+
+
+```{r}
+survfit2(Surv(tenure, status) ~ 1, data = data) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+  ) + 
+  add_confidence_interval()
+```
+
+```{r}
+survfit2(Surv(tenure, status) ~ 1, data = data) %>% 
+  ggsurvfit() +
+  labs(
+    x = "Years",
+    y = "Overall survival probability"
+    ) + 
+  add_confidence_interval() +
+  add_risktable()
+```
+
+
+```{r}
+summary(survfit(Surv(tenure, status) ~ 1, data = data), times = 5)
+```
+
+```{r}
+survfit(Surv(tenure, status) ~ 1, data = data) %>% 
+  tbl_survfit(
+    times = 5,
+    label_header = "**5-year survival (95% CI)**"
+  )
+```
+
+
+```{r}
+survfit(Surv(tenure, status) ~ 1, data = data)
+```
+
+
+
+```{r}
+data %>% 
+  filter(status == 1) %>% 
+  summarize(median_surv = median(tenure))
+```
+
+```{r}
+survfit(Surv(tenure, status) ~ 1, data = data) %>% 
+  tbl_survfit(
+    probs = 0.5,
+    label_header = "**Median survival (95% CI)**"
+  )
+```
+
+
+
+```{r}
+survdiff(Surv(tenure, status) ~ sex, data = data)
+```
+
+
+```{r}
+survdiff(Surv(tenure, status) ~ sysofgov, data = data)
+```
+
+```{r}
+
+fit1 <- survfit(Surv(tenure, status) ~ 1, data = data)
+
+prob_times <- seq(2, 2 * 5, 4)
+
+gg_conditional_surv(
+  basekm = fit1, 
+  at = prob_times,
+  main = "Conditional survival in party leadership data",
+  xlab = "Days"
+  ) +
+  labs(color = "Conditional time")
+```
+
